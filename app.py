@@ -1,3 +1,5 @@
+import nltk
+nltk.download('punkt')
 import streamlit as st
 import pandas as pd
 from utils.data_engine import robust_yf_download, get_fundamentals, get_news_sentiment
