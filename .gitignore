@@ -1,1 +1,48 @@
+# PYTHON
+__pycache__/
+*.py[cod]
+*.so
+.Python
+build/
+dist/
+*.egg-info/
 
+# STREAMLIT
+.streamlit/secrets.toml
+.streamlit/cache/
+
+# DATABASE (CRITICAL!)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+
+# SECRETS (CRITICAL!)
+.env
+.env.local
+*secret*
+*token*
+*key*
+
+# DATA
+*.csv
+*.xlsx
+*.json
+
+# ENVIRONMENT
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# TESTING
+.pytest_cache/
+.coverage
+htmlcov/
