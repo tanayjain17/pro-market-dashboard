@@ -208,3 +208,29 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# In app.py, add at the top:
+from utils.analytics_engine import init_analytics_db, log_prediction, calculate_win_rate
+
+# Initialize database on app start
+init_analytics_db()
+
+# In the Stock Analyzer section, after getting prediction:
+if prediction and "BUY" in prediction['verdict']:
+    # Log the prediction
+    prediction_id = log_prediction(
+        ticker=full_ticker,
+        verdict=prediction['verdict'],
+        predicted_price=prediction['curr'],
+        sl=prediction['sl'],
+        tgt=prediction['tgt'],
+        confidence=prediction['confidence'],
+        entry_price=prediction['curr']
+    )
+    
+    st.success(f"✅ Prediction logged (ID: {prediction_id})")
+    
+    # Show win rate
+    wr = calculate_win_rate(days=30)
+    st.info(f"📊 30-day Win Rate: **{wr['win_rate']:.1f}%** ({wr['wins']}/{wr['total_trades']} trades)")
+
+
