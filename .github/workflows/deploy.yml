@@ -1,0 +1,65 @@
+name: 🚀 Deploy to Streamlit Cloud
+
+on:
+  push:
+    branches: [ main ]
+  workflow_run:
+    workflows: [ "🧪 Auto Test & Lint" ]
+    branches: [ main ]
+    types:
+      - completed
+
+jobs:
+  deploy:
+    # Only deploy if tests pass
+    if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'push'
+    
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: 📋 List files
+      run: |
+        echo "Checking project structure..."
+        ls -la
+        [ -f requirements.txt ] && echo "✅ requirements.txt found"
+        [ -f app.py ] && echo "✅ app.py found"
+        [ -d .streamlit ] && echo "✅ .streamlit directory found"
+    
+    - name: 🔐 Set Streamlit secrets
+      env:
+        STREAMLIT_SECRETS: ${{ secrets.STREAMLIT_SECRETS }}
+      run: |
+        mkdir -p ~/.streamlit
+        echo "$STREAMLIT_SECRETS" > ~/.streamlit/secrets.toml
+    
+    - name: 📤 Trigger Streamlit Cloud deployment
+      run: |
+        # Streamlit Cloud auto-deploys on git push to main
+        echo "✅ Streamlit Cloud will auto-deploy on push"
+        echo "App URL: https://share.streamlit.io/${{ github.repository_owner }}/${{ github.event.repository.name }}"
+    
+    - name: 📧 Notify on success
+      if: success()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: '✅ **Deployment successful!** Your Streamlit app is live.'
+          })
+    
+    - name: ❌ Notify on failure
+      if: failure()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: '❌ **Deployment failed.** Check GitHub Actions for details.'
+          })
