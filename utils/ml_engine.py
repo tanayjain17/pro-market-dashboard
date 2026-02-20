@@ -8,6 +8,7 @@ import requests
 import json
 from datetime import datetime, timedelta
 import time
+import feedparser
 
 # ============================================
 # FREE INDIAN STOCK API CONFIGURATION
@@ -16,27 +17,13 @@ import time
 # 1. Indian-Stock-Market-API (No key needed)
 INDIAN_API_BASE = "https://military-jobye-haiqstudios-14f59639.koyeb.app"
 
-# 2. TradingView MCP (Install: pip install mcp-server-tradingview)
-try:
-    from mcp_server.tradingview import TradingViewClient
-    TRADINGVIEW_AVAILABLE = True
-except ImportError:
-    TRADINGVIEW_AVAILABLE = False
-    st.warning("TradingView MCP not installed. Install with: pip install mcp-server-tradingview")
-
-# 3. AngelOne SmartAPI (Free with trading account)
-try:
-    from smartapi import SmartConnect
-    ANGEL_AVAILABLE = True
-except ImportError:
-    ANGEL_AVAILABLE = False
-
-# 4. News API (RapidAPI free tier)
+# 2. RapidAPI Configuration (YH Finance)
 RAPIDAPI_KEY = st.secrets.get("RAPIDAPI_KEY", "")
-NEWS_API_URL = "https://yahoo-finance-india1.p.rapidapi.com/get-news"
+RAPIDAPI_HOST = "yh-finance.p.rapidapi.com"
+NEWS_API_URL = "https://yh-finance.p.rapidapi.com/stock/get-news"
 
 # ============================================
-# INDIAN STOCK DATA FETCHERS
+# INDIAN STOCK DATA FETCHER
 # ============================================
 
 class IndianStockDataFetcher:
@@ -45,70 +32,52 @@ class IndianStockDataFetcher:
     def __init__(self):
         self.base_url = INDIAN_API_BASE
         
-    @st.cache_data(ttl=300)  # Cache for 5 minutes
+    @st.cache_data(ttl=300)
     def get_historical_data(self, symbol, exchange="NSE", days=100):
-        """
-        Fetch historical data for Indian stocks
-        Symbol examples: "RELIANCE", "TCS", "HDFCBANK"
-        """
+        """Fetch historical data for Indian stocks"""
         try:
-            # Add exchange suffix
             suffix = ".NS" if exchange == "NSE" else ".BO"
             full_symbol = f"{symbol}{suffix}"
             
-            # Fetch from API
             response = requests.get(
                 f"{self.base_url}/stock",
                 params={"symbol": full_symbol, "res": "full"}
             )
             
             if response.status_code != 200:
-                st.error(f"API error: {response.status_code}")
                 return None
             
             data = response.json()
             
-            # Parse into DataFrame
             if "data" in data:
                 stock_data = data["data"]
-                
-                # Create DataFrame with proper columns
                 df = pd.DataFrame([stock_data])
-                
-                # Convert to proper format for your calculate_features function
                 df = df.rename(columns={
                     'last_price': 'Close',
                     'day_high': 'High',
                     'day_low': 'Low',
                     'volume': 'Volume'
                 })
-                
-                # Add timestamp
                 df['Date'] = pd.to_datetime(stock_data.get('last_update', datetime.now()))
                 df.set_index('Date', inplace=True)
                 
-                # Ensure we have enough data points (repeat for demo if needed)
                 if len(df) < 50:
-                    # Generate synthetic historical data for demonstration
                     df = self._generate_extended_history(df, days)
                 
                 return df
-            else:
-                return None
+            return None
                 
         except Exception as e:
             st.error(f"Error fetching data for {symbol}: {e}")
             return None
     
     def _generate_extended_history(self, df, days):
-        """Generate synthetic historical data for demonstration"""
+        """Generate synthetic historical data if needed"""
         if df.empty:
             return None
             
         last_close = df['Close'].iloc[0]
         dates = pd.date_range(end=datetime.now(), periods=days, freq='D')
-        
-        # Generate random walk
         returns = np.random.randn(days) * 0.02
         price_series = last_close * (1 + np.cumsum(returns))
         
@@ -121,60 +90,73 @@ class IndianStockDataFetcher:
         
         return synthetic_df
     
-    @st.cache_data(ttl=3600)
-    def get_technical_indicators(self, symbol):
-        """Get pre-calculated technical indicators from TradingView"""
-        if not TRADINGVIEW_AVAILABLE:
-            return {}
-            
-        try:
-            client = TradingViewClient()
-            data = client.check_stock_values([f"{symbol}.NS"])
-            
-            if symbol in data:
-                return {
-                    'ema_9': data[symbol]['EMA9'],
-                    'ema_20': data[symbol]['EMA20'],
-                    'ema_50': data[symbol]['EMA50'],
-                    'rsi': data[symbol]['RSI'],
-                    'macd': data[symbol]['MACD'],
-                    'bb_upper': data[symbol]['BB_UPPER'],
-                    'bb_lower': data[symbol]['BB_LOWER']
-                }
-        except Exception as e:
-            st.warning(f"TradingView indicators unavailable: {e}")
-        
-        return {}
-    
     @st.cache_data(ttl=1800)
     def get_stock_news(self, symbol, limit=5):
         """Fetch latest news for the stock"""
-        if not RAPIDAPI_KEY:
-            return []
+        # Try RSS feeds first (no API key needed)
+        news = self._get_free_rss_news(symbol, limit)
+        if news:
+            return news
             
-        try:
-            headers = {
-                "X-RapidAPI-Key": RAPIDAPI_KEY,
-                "X-RapidAPI-Host": "yahoo-finance-india1.p.rapidapi.com"
-            }
-            
-            response = requests.get(
-                NEWS_API_URL,
-                headers=headers,
-                params={"symbol": symbol}
-            )
-            
-            if response.status_code == 200:
-                news_data = response.json()
-                return news_data.get('items', [])[:limit]
-        except Exception as e:
-            st.warning(f"News fetch failed: {e}")
+        # If RSS fails and we have API key, try RapidAPI
+        if RAPIDAPI_KEY:
+            try:
+                if not symbol.endswith(('.NS', '.BO')):
+                    symbol = f"{symbol}.NS"
+                    
+                headers = {
+                    "X-RapidAPI-Key": RAPIDAPI_KEY,
+                    "X-RapidAPI-Host": RAPIDAPI_HOST
+                }
+                
+                params = {"symbol": symbol, "region": "IN"}
+                
+                response = requests.get(NEWS_API_URL, headers=headers, params=params, timeout=10)
+                
+                if response.status_code == 200:
+                    news_data = response.json()
+                    if isinstance(news_data, list):
+                        return news_data[:limit]
+                    elif isinstance(news_data, dict):
+                        for key in ['news', 'items', 'data', 'result', 'articles']:
+                            if key in news_data and isinstance(news_data[key], list):
+                                return news_data[key][:limit]
+            except:
+                pass
         
         return []
+    
+    def _get_free_rss_news(self, symbol, limit=5):
+        """Free RSS feeds as fallback"""
+        try:
+            clean_symbol = symbol.replace('.NS', '').replace('.BO', '')
+            
+            news_sources = [
+                f"https://news.google.com/rss/search?q={clean_symbol}+NSE+India&hl=en-IN&gl=IN&ceid=IN:en",
+                "https://www.moneycontrol.com/rss/latestnews.xml",
+                "https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms"
+            ]
+            
+            all_news = []
+            for url in news_sources:
+                try:
+                    feed = feedparser.parse(url)
+                    for entry in feed.entries[:3]:
+                        all_news.append({
+                            'title': entry.get('title', ''),
+                            'link': entry.get('link', ''),
+                            'published': entry.get('published', '')
+                        })
+                except:
+                    continue
+            
+            return all_news[:limit]
+        except:
+            return []
 
 
 # ============================================
-# ENHANCED PREDICTION ENGINE
+# PREDICTION ENGINE
 # ============================================
 
 class IndianStockPredictor:
@@ -182,73 +164,42 @@ class IndianStockPredictor:
         self.data_fetcher = IndianStockDataFetcher()
         
     def get_complete_analysis(self, symbol, exchange="NSE"):
-        """
-        Get complete stock analysis including:
-        - Technical indicators
-        - Support/resistance levels
-        - Trend prediction
-        - News sentiment
-        """
+        """Complete stock analysis"""
         
-        # 1. Fetch historical data for your calculate_features function
         historical_df = self.data_fetcher.get_historical_data(symbol, exchange)
         
         if historical_df is None or len(historical_df) < 20:
             return {"error": f"Insufficient data for {symbol}"}
         
-        # 2. Calculate technical features using YOUR existing function
         df_with_features = calculate_features(historical_df)
-        
-        # 3. Generate prediction using YOUR existing run_smart_prediction
         prediction = run_smart_prediction(symbol, df_with_features)
-        
-        # 4. Get additional indicators from TradingView
-        tv_indicators = self.data_fetcher.get_technical_indicators(symbol)
-        
-        # 5. Calculate support/resistance
         support, resistance = self._calculate_support_resistance(df_with_features)
-        
-        # 6. Fetch news
         news = self.data_fetcher.get_stock_news(symbol)
         
-        # 7. Combine all data
         result = {
             "symbol": symbol,
             "exchange": exchange,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "current_price": historical_df['Close'].iloc[-1] if not historical_df.empty else None,
             "prediction": prediction,
-            "technical_indicators": {
-                "ema_9": tv_indicators.get('ema_9', None),
-                "ema_20": tv_indicators.get('ema_20', None),
-                "rsi": tv_indicators.get('rsi', prediction.get('rsi') if prediction else None),
-                "macd": tv_indicators.get('macd', prediction.get('macd') if prediction else None),
-            },
             "support_resistance": {
                 "support": support,
                 "resistance": resistance
             },
-            "news": news[:3] if news else [],  # Top 3 news
+            "news": news[:3] if news else [],
             "news_sentiment": self._analyze_news_sentiment(news) if news else "NEUTRAL"
         }
         
         return result
     
     def _calculate_support_resistance(self, df):
-        """Calculate support and resistance levels"""
         if df is None or len(df) < 20:
             return None, None
-            
-        # Support: Recent lows
-        support = df['Low'].tail(20).min()
-        
-        # Resistance: Recent highs
-        resistance = df['High'].tail(20).max()
-        
-        return round(support, 2), round(resistance, 2)
+        support = round(df['Low'].tail(20).min(), 2)
+        resistance = round(df['High'].tail(20).max(), 2)
+        return support, resistance
     
     def _analyze_news_sentiment(self, news_items):
-        """Simple news sentiment analysis"""
         if not news_items:
             return "NEUTRAL"
             
@@ -269,11 +220,11 @@ class IndianStockPredictor:
 
 
 # ============================================
-# YOUR EXISTING FUNCTIONS (KEEP THESE EXACTLY)
+# YOUR EXISTING TECHNICAL FUNCTIONS
 # ============================================
 
 def calculate_features(df):
-    """Calculate technical indicators with proper formulas"""
+    """Calculate technical indicators"""
     df = df.copy()
     
     if len(df) < 50:
@@ -285,7 +236,7 @@ def calculate_features(df):
         df['SMA_20'] = df['Close'].rolling(20).mean()
         df['SMA_50'] = df['Close'].rolling(50).mean()
         
-        # RSI - Wilder's Smoothing (CORRECT)
+        # RSI
         delta = df['Close'].diff()
         gain = delta.where(delta > 0, 0)
         loss = -delta.where(delta < 0, 0)
@@ -326,12 +277,11 @@ def calculate_features(df):
         return None
 
 def run_smart_prediction(ticker, df):
-    """Generate trading verdict with confidence"""
+    """Generate trading verdict"""
     try:
         if df is None or len(df) < 50:
             return None
         
-        # Extract latest values
         curr_price = df['Close'].iloc[-1]
         rsi = df['RSI'].iloc[-1]
         macd_hist = df['MACD_Hist'].iloc[-1]
@@ -339,7 +289,6 @@ def run_smart_prediction(ticker, df):
         atr = df['ATR'].iloc[-1]
         vol_ratio = df['Vol_Ratio'].iloc[-1]
         
-        # Decision Logic
         verdict = "HOLD"
         color = "#888888"
         reason = "No clear signal"
@@ -377,7 +326,6 @@ def run_smart_prediction(ticker, df):
             reason = "Below SMA50 + MACD Negative"
             confidence = 0.65
         
-        # Risk/Reward
         sl = curr_price - (2.0 * atr) if "BUY" in verdict else curr_price + (1.5 * atr)
         tgt = curr_price + (3.0 * atr) if "BUY" in verdict else curr_price - (2.0 * atr)
         
@@ -399,56 +347,50 @@ def run_smart_prediction(ticker, df):
 
 
 # ============================================
-# EASY-TO-USE WRAPPER FUNCTION
+# MAIN FUNCTION - USE THIS IN YOUR APP
 # ============================================
 
 def analyze_indian_stock(symbol, exchange="NSE"):
     """
-    ONE FUNCTION TO RULE THEM ALL!
+    MAIN FUNCTION TO USE IN YOUR STREAMLIT APP
     
-    Usage:
+    Example:
         result = analyze_indian_stock("RELIANCE")
-        print(result['prediction']['verdict'])
-        print(result['support_resistance'])
+        if result and 'error' not in result:
+            st.write(result['prediction']['verdict'])
     """
     predictor = IndianStockPredictor()
     return predictor.get_complete_analysis(symbol, exchange)
 
-# Add this to your ml_engine.py
-def get_free_indian_news(symbol):
-    """Get news without any API key"""
-    import feedparser
-    
-    # Try multiple sources
-    news_sources = [
-        f"https://news.google.com/rss/search?q={symbol}+NSE+India&hl=en-IN&gl=IN&ceid=IN:en",
-        "https://www.moneycontrol.com/rss/latestnews.xml",
-        "https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms"
-    ]
-    
-    all_news = []
-    for url in news_sources:
-        try:
-            feed = feedparser.parse(url)
-            all_news.extend(feed.entries[:3])
-        except:
-            continue
-    
-    return all_news[:5]
 
+# ============================================
+# TEST THE CODE
+# ============================================
 
-# For quick testing
 if __name__ == "__main__":
+    print("🚀 Testing Indian Stock Analysis...")
+    
     # Test with Reliance
     result = analyze_indian_stock("RELIANCE")
+    
     if result and 'error' not in result:
-        print(f"\n🔍 Analysis for {result['symbol']}")
-        print(f"Current Price: ₹{result['current_price']}")
+        print(f"\n✅ Analysis for {result['symbol']}")
+        print(f"💰 Current Price: ₹{result['current_price']}")
+        
         if result['prediction']:
-            print(f"Verdict: {result['prediction']['verdict']}")
-            print(f"Reason: {result['prediction']['reason']}")
-        print(f"Support: ₹{result['support_resistance']['support']}")
-        print(f"Resistance: ₹{result['support_resistance']['resistance']}")
+            print(f"\n🎯 Verdict: {result['prediction']['verdict']}")
+            print(f"📝 Reason: {result['prediction']['reason']}")
+            print(f"⚡ Confidence: {result['prediction']['confidence']*100:.0f}%")
+        
+        print(f"\n📊 Support: ₹{result['support_resistance']['support']}")
+        print(f"📈 Resistance: ₹{result['support_resistance']['resistance']}")
+        
+        if result['news']:
+            print(f"\n📰 News Sentiment: {result['news_sentiment']}")
+            print("Top Headlines:")
+            for i, news in enumerate(result['news'][:3], 1):
+                title = news.get('title', 'No title')
+                print(f"{i}. {title[:50]}...")
     else:
-        print("Demo mode: Install required packages for live data")
-        print("pip install mcp-server-tradingview smartapi")
+        print("❌ Test failed. Make sure you have internet connection.")
+        print("Note: News will work only if you added RapidAPI key to secrets")
