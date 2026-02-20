@@ -11,65 +11,309 @@ import time
 import feedparser
 
 # ============================================
-# FREE INDIAN STOCK API CONFIGURATION
+# MULTIPLE INDIAN STOCK API CONFIGURATION
 # ============================================
 
-# 1. Indian-Stock-Market-API (No key needed)
+# 1. Indian-Stock-Market-API (No key needed - PRIMARY)
 INDIAN_API_BASE = "https://military-jobye-haiqstudios-14f59639.koyeb.app"
 
-# 2. RapidAPI Configuration (YH Finance)
+# 2. AngelOne SmartAPI (You have login!)
+ANGELONE_API_KEY = st.secrets.get("ANGELONE_API_KEY", "")
+ANGELONE_CLIENT_ID = st.secrets.get("ANGELONE_CLIENT_ID", "")
+ANGELONE_PASSWORD = st.secrets.get("ANGELONE_PASSWORD", "")
+ANGELONE_TOTP = st.secrets.get("ANGELONE_TOTP", "")
+
+# 3. RapidAPI Configuration (YH Finance - BACKUP)
 RAPIDAPI_KEY = st.secrets.get("RAPIDAPI_KEY", "")
 RAPIDAPI_HOST = "yh-finance.p.rapidapi.com"
 NEWS_API_URL = "https://yh-finance.p.rapidapi.com/stock/get-news"
 
+# 4. Alpha Vantage (Free tier - 5 calls/min)
+ALPHA_VANTAGE_KEY = st.secrets.get("ALPHA_VANTAGE_KEY", "")
+
+# 5. Financial Modeling Prep (Free tier)
+FMP_KEY = st.secrets.get("FMP_KEY", "")
+
+
 # ============================================
-# INDIAN STOCK DATA FETCHER
+# ANGELONE SMARTAPI INTEGRATION
+# ============================================
+
+class AngelOneClient:
+    """AngelOne SmartAPI client for Indian stocks"""
+    
+    def __init__(self):
+        self.api_key = ANGELONE_API_KEY
+        self.client_id = ANGELONE_CLIENT_ID
+        self.password = ANGELONE_PASSWORD
+        self.totp = ANGELONE_TOTP
+        self.jwt_token = None
+        self.refresh_token = None
+        self.feed_token = None
+        self.user_profile = None
+        self.is_connected = False
+        
+    def connect(self):
+        """Connect to AngelOne SmartAPI"""
+        if not all([self.api_key, self.client_id, self.password]):
+            return False
+            
+        try:
+            # Try to import smartapi
+            from smartapi import SmartConnect
+            
+            # Create connection object
+            obj = SmartConnect(
+                api_key=self.api_key,
+                client_id=self.client_id,
+                password=self.password,
+                totp_secret=self.totp
+            )
+            
+            # Login
+            data = obj.generateSession()
+            self.jwt_token = data['data']['jwtToken']
+            self.refresh_token = data['data']['refreshToken']
+            self.feed_token = obj.getfeedToken()
+            self.user_profile = obj.getProfile(self.refresh_token)
+            self.is_connected = True
+            return True
+            
+        except Exception as e:
+            st.warning(f"AngelOne connection failed: {e}")
+            return False
+    
+    @st.cache_data(ttl=60)  # Cache for 1 minute
+    def get_ltp(self, symbol, exchange="NSE"):
+        """Get last traded price"""
+        if not self.is_connected:
+            return None
+            
+        try:
+            from smartapi import SmartConnect
+            # Add exchange prefix
+            if exchange == "NSE":
+                trading_symbol = f"NSE:{symbol}-EQ"
+            else:
+                trading_symbol = f"BSE:{symbol}-EQ"
+            
+            # Get LTP
+            ltp_data = obj.ltpData(exchange, trading_symbol, symbol)
+            return ltp_data['data']['ltp']
+        except:
+            return None
+    
+    @st.cache_data(ttl=300)  # Cache for 5 minutes
+    def get_historical_data(self, symbol, interval="ONE_DAY", days=100):
+        """Get historical data from AngelOne"""
+        if not self.is_connected:
+            return None
+            
+        try:
+            from smartapi import SmartConnect
+            
+            # Calculate from and to dates
+            to_date = datetime.now()
+            from_date = to_date - timedelta(days=days)
+            
+            # Format dates
+            from_str = from_date.strftime("%Y-%m-%d")
+            to_str = to_date.strftime("%Y-%m-%d")
+            
+            # Get historical data
+            historic_data = obj.getCandleData({
+                "exchange": "NSE",
+                "symboltoken": self.get_token(symbol),
+                "interval": interval,
+                "fromdate": from_str,
+                "todate": to_str
+            })
+            
+            # Convert to DataFrame
+            if historic_data and 'data' in historic_data:
+                df = pd.DataFrame(historic_data['data'], 
+                                columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+                df.set_index('timestamp', inplace=True)
+                df = df.rename(columns={
+                    'close': 'Close',
+                    'high': 'High',
+                    'low': 'Low',
+                    'volume': 'Volume',
+                    'open': 'Open'
+                })
+                return df
+        except:
+            return None
+    
+    def get_token(self, symbol):
+        """Get token for symbol (simplified)"""
+        # In production, you'd fetch from master contract
+        token_map = {
+            "RELIANCE": "2885",
+            "TCS": "295321",
+            "HDFCBANK": "341249",
+            "INFY": "1594",
+            "ITC": "1660",
+        }
+        return token_map.get(symbol, "2885")
+
+
+# ============================================
+# ALPHA VANTAGE INTEGRATION
+# ============================================
+
+class AlphaVantageClient:
+    """Alpha Vantage API client"""
+    
+    def __init__(self):
+        self.api_key = ALPHA_VANTAGE_KEY
+        self.base_url = "https://www.alphavantage.co/query"
+    
+    @st.cache_data(ttl=300)
+    def get_daily_data(self, symbol):
+        """Get daily adjusted data"""
+        if not self.api_key:
+            return None
+            
+        try:
+            params = {
+                "function": "TIME_SERIES_DAILY_ADJUSTED",
+                "symbol": f"{symbol}.BSE",  # For Indian stocks
+                "apikey": self.api_key,
+                "outputsize": "compact"
+            }
+            
+            response = requests.get(self.base_url, params=params, timeout=10)
+            data = response.json()
+            
+            if "Time Series (Daily)" in data:
+                df = pd.DataFrame.from_dict(data["Time Series (Daily)"], orient='index')
+                df.index = pd.to_datetime(df.index)
+                df = df.astype(float)
+                df = df.rename(columns={
+                    '4. close': 'Close',
+                    '2. high': 'High',
+                    '3. low': 'Low',
+                    '6. volume': 'Volume'
+                })
+                return df.sort_index()
+        except:
+            return None
+    
+    @st.cache_data(ttl=3600)
+    def get_technical_indicators(self, symbol):
+        """Get RSI, MACD, etc."""
+        if not self.api_key:
+            return {}
+            
+        indicators = {}
+        try:
+            # RSI
+            params = {
+                "function": "RSI",
+                "symbol": f"{symbol}.BSE",
+                "interval": "daily",
+                "time_period": 14,
+                "series_type": "close",
+                "apikey": self.api_key
+            }
+            response = requests.get(self.base_url, params=params)
+            if "Technical Analysis: RSI" in response.json():
+                rsi_data = response.json()["Technical Analysis: RSI"]
+                latest = list(rsi_data.values())[0]
+                indicators['rsi'] = float(latest['RSI'])
+        except:
+            pass
+            
+        return indicators
+
+
+# ============================================
+# MASTER DATA FETCHER (USES BEST AVAILABLE SOURCE)
 # ============================================
 
 class IndianStockDataFetcher:
-    """Fetch Indian stock data from free APIs"""
+    """Fetch Indian stock data from best available source"""
     
     def __init__(self):
+        # Initialize all clients
         self.base_url = INDIAN_API_BASE
+        
+        # AngelOne
+        self.angel_client = AngelOneClient()
+        self.angel_connected = self.angel_client.connect()
+        
+        # Alpha Vantage
+        self.alpha_client = AlphaVantageClient()
+        
+        # Data source priority
+        self.data_sources = []
+        if self.angel_connected:
+            self.data_sources.append(("AngelOne", self.angel_client))
+        if ALPHA_VANTAGE_KEY:
+            self.data_sources.append(("Alpha Vantage", self.alpha_client))
+        self.data_sources.append(("Free API", self))  # Fallback to free API
         
     @st.cache_data(ttl=300)
     def get_historical_data(self, symbol, exchange="NSE", days=100):
-        """Fetch historical data for Indian stocks"""
+        """Try multiple sources in order of preference"""
+        
+        # Try AngelOne first (most reliable for Indian stocks)
+        if self.angel_connected:
+            try:
+                data = self.angel_client.get_historical_data(symbol, days=days)
+                if data is not None and len(data) >= 20:
+                    return data
+            except:
+                pass
+        
+        # Try Alpha Vantage next
+        if ALPHA_VANTAGE_KEY:
+            try:
+                data = self.alpha_client.get_daily_data(symbol)
+                if data is not None and len(data) >= 20:
+                    return data
+            except:
+                pass
+        
+        # Fallback to free API
+        return self._get_free_api_data(symbol, exchange, days)
+    
+    def _get_free_api_data(self, symbol, exchange="NSE", days=100):
+        """Free Indian stock API as fallback"""
         try:
             suffix = ".NS" if exchange == "NSE" else ".BO"
             full_symbol = f"{symbol}{suffix}"
             
             response = requests.get(
                 f"{self.base_url}/stock",
-                params={"symbol": full_symbol, "res": "full"}
+                params={"symbol": full_symbol, "res": "full"},
+                timeout=10
             )
             
-            if response.status_code != 200:
-                return None
-            
-            data = response.json()
-            
-            if "data" in data:
-                stock_data = data["data"]
-                df = pd.DataFrame([stock_data])
-                df = df.rename(columns={
-                    'last_price': 'Close',
-                    'day_high': 'High',
-                    'day_low': 'Low',
-                    'volume': 'Volume'
-                })
-                df['Date'] = pd.to_datetime(stock_data.get('last_update', datetime.now()))
-                df.set_index('Date', inplace=True)
-                
-                if len(df) < 50:
-                    df = self._generate_extended_history(df, days)
-                
-                return df
-            return None
-                
-        except Exception as e:
-            st.error(f"Error fetching data for {symbol}: {e}")
-            return None
+            if response.status_code == 200:
+                data = response.json()
+                if "data" in data:
+                    stock_data = data["data"]
+                    df = pd.DataFrame([stock_data])
+                    df = df.rename(columns={
+                        'last_price': 'Close',
+                        'day_high': 'High',
+                        'day_low': 'Low',
+                        'volume': 'Volume'
+                    })
+                    df['Date'] = pd.to_datetime(stock_data.get('last_update', datetime.now()))
+                    df.set_index('Date', inplace=True)
+                    
+                    if len(df) < 50:
+                        df = self._generate_extended_history(df, days)
+                    
+                    return df
+        except:
+            pass
+        
+        return None
     
     def _generate_extended_history(self, df, days):
         """Generate synthetic historical data if needed"""
@@ -92,38 +336,52 @@ class IndianStockDataFetcher:
     
     @st.cache_data(ttl=1800)
     def get_stock_news(self, symbol, limit=5):
-        """Fetch latest news for the stock"""
-        # Try RSS feeds first (no API key needed)
+        """Fetch news from multiple sources"""
+        
+        # Try to get news from various sources
+        news = []
+        
+        # 1. Try RSS feeds first (always free)
         news = self._get_free_rss_news(symbol, limit)
         if news:
             return news
-            
-        # If RSS fails and we have API key, try RapidAPI
+        
+        # 2. Try RapidAPI if available
         if RAPIDAPI_KEY:
             try:
-                if not symbol.endswith(('.NS', '.BO')):
-                    symbol = f"{symbol}.NS"
-                    
-                headers = {
-                    "X-RapidAPI-Key": RAPIDAPI_KEY,
-                    "X-RapidAPI-Host": RAPIDAPI_HOST
-                }
-                
-                params = {"symbol": symbol, "region": "IN"}
-                
-                response = requests.get(NEWS_API_URL, headers=headers, params=params, timeout=10)
-                
-                if response.status_code == 200:
-                    news_data = response.json()
-                    if isinstance(news_data, list):
-                        return news_data[:limit]
-                    elif isinstance(news_data, dict):
-                        for key in ['news', 'items', 'data', 'result', 'articles']:
-                            if key in news_data and isinstance(news_data[key], list):
-                                return news_data[key][:limit]
+                rapid_news = self._get_rapidapi_news(symbol, limit)
+                if rapid_news:
+                    return rapid_news
             except:
                 pass
         
+        return []
+    
+    def _get_rapidapi_news(self, symbol, limit):
+        """Get news from RapidAPI"""
+        try:
+            if not symbol.endswith(('.NS', '.BO')):
+                symbol = f"{symbol}.NS"
+                
+            headers = {
+                "X-RapidAPI-Key": RAPIDAPI_KEY,
+                "X-RapidAPI-Host": RAPIDAPI_HOST
+            }
+            
+            params = {"symbol": symbol, "region": "IN"}
+            
+            response = requests.get(NEWS_API_URL, headers=headers, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                news_data = response.json()
+                if isinstance(news_data, list):
+                    return news_data[:limit]
+                elif isinstance(news_data, dict):
+                    for key in ['news', 'items', 'data', 'result', 'articles']:
+                        if key in news_data and isinstance(news_data[key], list):
+                            return news_data[key][:limit]
+        except:
+            pass
         return []
     
     def _get_free_rss_news(self, symbol, limit=5):
@@ -164,7 +422,10 @@ class IndianStockPredictor:
         self.data_fetcher = IndianStockDataFetcher()
         
     def get_complete_analysis(self, symbol, exchange="NSE"):
-        """Complete stock analysis"""
+        """Complete stock analysis using best available data"""
+        
+        # Show data source info
+        data_source = "AngelOne" if self.data_fetcher.angel_connected else "Free API"
         
         historical_df = self.data_fetcher.get_historical_data(symbol, exchange)
         
@@ -179,6 +440,7 @@ class IndianStockPredictor:
         result = {
             "symbol": symbol,
             "exchange": exchange,
+            "data_source": data_source,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "current_price": historical_df['Close'].iloc[-1] if not historical_df.empty else None,
             "prediction": prediction,
@@ -220,7 +482,7 @@ class IndianStockPredictor:
 
 
 # ============================================
-# YOUR EXISTING TECHNICAL FUNCTIONS
+# YOUR EXISTING TECHNICAL FUNCTIONS (KEEP AS IS)
 # ============================================
 
 def calculate_features(df):
@@ -352,12 +614,8 @@ def run_smart_prediction(ticker, df):
 
 def analyze_indian_stock(symbol, exchange="NSE"):
     """
-    MAIN FUNCTION TO USE IN YOUR STREAMLIT APP
-    
-    Example:
-        result = analyze_indian_stock("RELIANCE")
-        if result and 'error' not in result:
-            st.write(result['prediction']['verdict'])
+    MAIN FUNCTION - Uses best available data source
+    AngelOne > Alpha Vantage > Free API
     """
     predictor = IndianStockPredictor()
     return predictor.get_complete_analysis(symbol, exchange)
@@ -368,13 +626,14 @@ def analyze_indian_stock(symbol, exchange="NSE"):
 # ============================================
 
 if __name__ == "__main__":
-    print("🚀 Testing Indian Stock Analysis...")
+    print("🚀 Testing Multi-Source Indian Stock Analysis...")
     
     # Test with Reliance
     result = analyze_indian_stock("RELIANCE")
     
     if result and 'error' not in result:
         print(f"\n✅ Analysis for {result['symbol']}")
+        print(f"📊 Data Source: {result.get('data_source', 'Free API')}")
         print(f"💰 Current Price: ₹{result['current_price']}")
         
         if result['prediction']:
@@ -384,13 +643,5 @@ if __name__ == "__main__":
         
         print(f"\n📊 Support: ₹{result['support_resistance']['support']}")
         print(f"📈 Resistance: ₹{result['support_resistance']['resistance']}")
-        
-        if result['news']:
-            print(f"\n📰 News Sentiment: {result['news_sentiment']}")
-            print("Top Headlines:")
-            for i, news in enumerate(result['news'][:3], 1):
-                title = news.get('title', 'No title')
-                print(f"{i}. {title[:50]}...")
     else:
-        print("❌ Test failed. Make sure you have internet connection.")
-        print("Note: News will work only if you added RapidAPI key to secrets")
+        print("❌ Test failed.")
