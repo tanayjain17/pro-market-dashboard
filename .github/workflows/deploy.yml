@@ -45,10 +45,10 @@ jobs:
       uses: actions/github-script@v7
       with:
         script: |
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
+          github.rest.repos.createCommitComment({
             owner: context.repo.owner,
             repo: context.repo.repo,
+            commit_sha: context.sha,
             body: '✅ **Deployment successful!** Your Streamlit app is live.'
           })
     
@@ -57,9 +57,9 @@ jobs:
       uses: actions/github-script@v7
       with:
         script: |
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
+          github.rest.repos.createCommitComment({
             owner: context.repo.owner,
             repo: context.repo.repo,
+            commit_sha: context.sha,
             body: '❌ **Deployment failed.** Check GitHub Actions for details.'
           })
