@@ -19,3 +19,5 @@ bandit==1.7.5
 pip-audit==2.6.2
 scikit-learn==1.4.0
 scipy==1.12.0
+smartapi-python==1.2.0
+pyotp==2.8.0
