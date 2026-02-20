@@ -33,7 +33,7 @@ jobs:
     
     # 4. Code formatting check (Black)
     - name: 🎨 Check code formatting
-      run: black --check . --exclude=".venv,venv"
+      run: black --check . --exclude=".venv|venv|__pycache__"
     
     # 5. Linting (Flake8)
     - name: 🔍 Lint with flake8
@@ -43,11 +43,12 @@ jobs:
     
     # 6. Type checking (MyPy)
     - name: 📋 Type checking with mypy
-      run: mypy utils/ --ignore-missing-imports || true
+      run: mypy utils/ pages/ --ignore-missing-imports || true
     
     # 7. Unit tests (Pytest)
     - name: ✅ Run unit tests with pytest
-      run: pytest tests/ -v --cov=utils --cov-report=xml --cov-report=html
+      run: |
+        pytest tests/ -v --cov=utils --cov=pages --cov-report=xml --cov-report=html --cov-report=term-missing
     
     # 8. Upload coverage to Codecov
     - name: 📊 Upload coverage to Codecov
@@ -62,33 +63,68 @@ jobs:
     - name: 🚀 Validate Streamlit app
       run: |
         streamlit run app.py --logger.level=debug --client.showErrorDetails=true &
-        sleep 5
-        kill %1 || true
+        STREAMLIT_PID=$!
+        sleep 10
+        if ps -p $STREAMLIT_PID > /dev/null; then
+          echo "✅ Streamlit app started successfully"
+          kill $STREAMLIT_PID
+        else
+          echo "❌ Streamlit app failed to start"
+          exit 1
+        fi
 
-  # Security check
   security:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
     
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    - name: Install bandit
+      run: pip install bandit
+    
     - name: Run Bandit security check
       run: |
-        pip install bandit
-        bandit -r . -f json -o bandit-report.json || true
+        bandit -r . -f json -o bandit-report.json \
+          --exclude ./tests,./venv,./.venv,./__pycache__ \
+          --severity-level medium \
+          --confidence-level medium || true
     
     - name: Upload security report
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4  # Updated to v4
       with:
         name: bandit-report
         path: bandit-report.json
 
-  # Dependency check
   dependencies:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
     
-    - name: Check for outdated dependencies
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    - name: Install dependencies
       run: |
-        pip install pip-audit
-        pip-audit --ignore-vuln CVE-2024-XXXXX || true
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Check for security vulnerabilities
+      run: |
+        pip install pip-audit safety
+        echo "🔒 Running pip-audit..."
+        pip-audit --requirement requirements.txt --ignore-vuln CVE-2024-XXXXX || true
+        echo "🔒 Running safety check..."
+        safety check -r requirements.txt --full-report || true
+    
+    - name: Check for outdated packages
+      run: |
+        pip install pip-outdated
+        pip-outdated requirements.txt || true
