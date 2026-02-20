@@ -414,6 +414,28 @@ def analyze_indian_stock(symbol, exchange="NSE"):
     predictor = IndianStockPredictor()
     return predictor.get_complete_analysis(symbol, exchange)
 
+# Add this to your ml_engine.py
+def get_free_indian_news(symbol):
+    """Get news without any API key"""
+    import feedparser
+    
+    # Try multiple sources
+    news_sources = [
+        f"https://news.google.com/rss/search?q={symbol}+NSE+India&hl=en-IN&gl=IN&ceid=IN:en",
+        "https://www.moneycontrol.com/rss/latestnews.xml",
+        "https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms"
+    ]
+    
+    all_news = []
+    for url in news_sources:
+        try:
+            feed = feedparser.parse(url)
+            all_news.extend(feed.entries[:3])
+        except:
+            continue
+    
+    return all_news[:5]
+
 
 # For quick testing
 if __name__ == "__main__":
