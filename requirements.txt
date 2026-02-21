@@ -1,15 +1,27 @@
-# Your current requirements.txt - THIS IS ENOUGH!
+# UI & Dashboard
 streamlit==1.40.0
-yfinance==0.2.40
+streamlit-autorefresh==1.0.1
+plotly==5.24.1
+
+# Data Manipulation & Machine Learning
 pandas==2.2.0
 numpy==1.26.4
-plotly==5.24.1
-requests==2.32.0           # ✅ This is the ONLY essential one for the API
+scipy==1.12.0
+scikit-learn==1.4.0
+
+# APIs, Scraping & Networking
+requests==2.32.0
+yfinance==0.2.40
+smartapi-python==1.2.0
+pyotp==2.8.0
 feedparser==6.0.10
 beautifulsoup4==4.12.3
+
+# NLP & Text Processing
 textblob==0.17.1
 nltk==3.8.1
-streamlit-autorefresh==1.0.1
+
+# Testing & Development Tools
 pytest==7.4.3
 pytest-cov==4.1.0
 black==24.1.0
@@ -17,13 +29,3 @@ flake8==7.0.0
 mypy==1.8.0
 bandit==1.7.5
 pip-audit==2.6.2
-scikit-learn==1.4.0
-scipy==1.12.0
-smartapi-python==1.2.0
-pyotp==2.8.0
-streamlit==1.40.0
-pandas==2.2.0
-numpy==1.26.4
-requests==2.32.0
-feedparser==6.0.10
-nltk==3.8.1
