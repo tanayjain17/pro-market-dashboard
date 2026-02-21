@@ -9,22 +9,15 @@ import json
 from datetime import datetime, timedelta
 import time
 import feedparser
-import pyotp
 
 # ============================================
-# ALL API CONFIGURATIONS
+# API CONFIGURATIONS
 # ============================================
 
-# 1. Free Indian Stock API (No key needed - FALLBACK)
+# 1. Free Indian Stock API (No key needed - PRIMARY)
 INDIAN_API_BASE = "https://military-jobye-haiqstudios-14f59639.koyeb.app"
 
-# 2. AngelOne SmartAPI (You have login - PRIMARY)
-ANGELONE_API_KEY = st.secrets.get("ANGELONE_API_KEY", "")
-ANGELONE_CLIENT_ID = st.secrets.get("ANGELONE_CLIENT_ID", "")
-ANGELONE_PASSWORD = st.secrets.get("ANGELONE_PASSWORD", "")  # 4-digit MPIN
-ANGELONE_TOTP = st.secrets.get("ANGELONE_TOTP", "")  # 32-char secret
-
-# 3. RapidAPI (YH Finance + FMP + Seeking Alpha)
+# 2. RapidAPI (YH Finance + FMP + Seeking Alpha) - OPTIONAL
 RAPIDAPI_KEY = st.secrets.get("RAPIDAPI_KEY", "")
 YH_FINANCE_HOST = "yh-finance.p.rapidapi.com"
 FMP_HOST = "financial-modeling-prep.p.rapidapi.com"
@@ -32,128 +25,11 @@ SEEKING_ALPHA_HOST = "seeking-alpha.p.rapidapi.com"
 
 
 # ============================================
-# ANGELONE SMARTAPI CLIENT
-# ============================================
-
-class AngelOneClient:
-    """AngelOne SmartAPI client for Indian stocks"""
-    
-    def __init__(self):
-        self.api_key = ANGELONE_API_KEY
-        self.client_id = ANGELONE_CLIENT_ID
-        self.password = ANGELONE_PASSWORD
-        self.totp_secret = ANGELONE_TOTP
-        self.jwt_token = None
-        self.refresh_token = None
-        self.feed_token = None
-        self.user_profile = None
-        self.is_connected = False
-        self.obj = None
-        
-    def connect(self):
-        """Connect to AngelOne SmartAPI"""
-        if not all([self.api_key, self.client_id, self.password, self.totp_secret]):
-            return False
-            
-        try:
-            from smartapi import SmartConnect
-            
-            # Generate TOTP
-            totp = pyotp.TOTP(self.totp_secret)
-            totp_code = totp.now()
-            
-            # Create connection
-            self.obj = SmartConnect(api_key=self.api_key)
-            
-            # Login
-            data = self.obj.generateSession(
-                client_id=self.client_id,
-                password=self.password,
-                totp=totp_code
-            )
-            
-            if data and 'data' in data:
-                self.jwt_token = data['data']['jwtToken']
-                self.refresh_token = data['data']['refreshToken']
-                self.feed_token = self.obj.getfeedToken()
-                self.user_profile = self.obj.getProfile(self.refresh_token)
-                self.is_connected = True
-                return True
-        except Exception as e:
-            st.warning(f"AngelOne connection failed: {e}")
-        
-        return False
-    
-    @st.cache_data(ttl=300)
-    def get_historical_data(self, symbol, days=100):
-        """Get historical data from AngelOne"""
-        if not self.is_connected:
-            return None
-            
-        try:
-            # Get token for symbol
-            token = self.get_token(symbol)
-            if not token:
-                return None
-            
-            # Calculate dates
-            to_date = datetime.now()
-            from_date = to_date - timedelta(days=days)
-            
-            # Format for AngelOne
-            from_str = from_date.strftime("%Y-%m-%d %H:%M")
-            to_str = to_date.strftime("%Y-%m-%d %H:%M")
-            
-            # Get candle data
-            historic_data = self.obj.getCandleData({
-                "exchange": "NSE",
-                "symboltoken": token,
-                "interval": "ONE_DAY",
-                "fromdate": from_str,
-                "todate": to_str
-            })
-            
-            if historic_data and 'data' in historic_data:
-                df = pd.DataFrame(historic_data['data'], 
-                                columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
-                df.set_index('timestamp', inplace=True)
-                df = df.rename(columns={
-                    'close': 'Close',
-                    'high': 'High',
-                    'low': 'Low',
-                    'volume': 'Volume',
-                    'open': 'Open'
-                })
-                return df
-        except Exception as e:
-            st.warning(f"AngelOne data fetch failed: {e}")
-        
-        return None
-    
-    def get_token(self, symbol):
-        """Get token for symbol (simplified - you can expand this)"""
-        tokens = {
-            "RELIANCE": "2885",
-            "TCS": "295321",
-            "HDFCBANK": "341249",
-            "INFY": "1594",
-            "ITC": "1660",
-            "SBIN": "3045",
-            "BHARTIARTL": "2714",
-            "WIPRO": "3787",
-            "HINDUNILVR": "1560",
-            "ICICIBANK": "4963"
-        }
-        return tokens.get(symbol.upper(), None)
-
-
-# ============================================
-# RAPIDAPI CLIENTS
+# RAPIDAPI CLIENT (OPTIONAL)
 # ============================================
 
 class RapidAPIClient:
-    """Handle all RapidAPI calls"""
+    """Handle all RapidAPI calls (optional)"""
     
     def __init__(self):
         self.api_key = RAPIDAPI_KEY
@@ -165,14 +41,11 @@ class RapidAPIClient:
             
         try:
             clean_symbol = symbol.replace('.NS', '').replace('.BO', '')
-            
-            # Get company ratios
             url = f"https://financial-modeling-prep.p.rapidapi.com/v3/ratios/{clean_symbol}"
             headers = {
                 "X-RapidAPI-Key": self.api_key,
                 "X-RapidAPI-Host": FMP_HOST
             }
-            
             response = requests.get(url, headers=headers, timeout=10)
             if response.status_code == 200:
                 return response.json()
@@ -187,14 +60,12 @@ class RapidAPIClient:
             
         try:
             clean_symbol = symbol.replace('.NS', '').replace('.BO', '')
-            
             url = "https://seeking-alpha.p.rapidapi.com/symbols/get-analysis"
             headers = {
                 "X-RapidAPI-Key": self.api_key,
                 "X-RapidAPI-Host": SEEKING_ALPHA_HOST
             }
             params = {"symbol": clean_symbol, "period": "quarterly"}
-            
             response = requests.get(url, headers=headers, params=params, timeout=10)
             if response.status_code == 200:
                 return response.json()
@@ -210,14 +81,12 @@ class RapidAPIClient:
         try:
             if not symbol.endswith(('.NS', '.BO')):
                 symbol = f"{symbol}.NS"
-                
             url = "https://yh-finance.p.rapidapi.com/stock/get-news"
             headers = {
                 "X-RapidAPI-Key": self.api_key,
                 "X-RapidAPI-Host": YH_FINANCE_HOST
             }
             params = {"symbol": symbol, "region": "IN"}
-            
             response = requests.get(url, headers=headers, params=params, timeout=10)
             if response.status_code == 200:
                 news_data = response.json()
@@ -233,18 +102,18 @@ class RapidAPIClient:
 
 
 # ============================================
-# FREE API CLIENT (FALLBACK)
+# FREE API CLIENT (MAIN)
 # ============================================
 
 class FreeAPIClient:
-    """Free Indian stock API as fallback"""
+    """Free Indian stock API (always works, no key needed)"""
     
     def __init__(self):
         self.base_url = INDIAN_API_BASE
     
     @st.cache_data(ttl=300)
     def get_historical_data(self, symbol, exchange="NSE", days=100):
-        """Get data from free API"""
+        """Get historical data from free API"""
         try:
             suffix = ".NS" if exchange == "NSE" else ".BO"
             full_symbol = f"{symbol}{suffix}"
@@ -273,8 +142,8 @@ class FreeAPIClient:
                         df = self._generate_extended_history(df, days)
                     
                     return df
-        except:
-            pass
+        except Exception as e:
+            st.warning(f"Free API error: {e}")
         return None
     
     def _generate_extended_history(self, df, days):
@@ -295,10 +164,9 @@ class FreeAPIClient:
         }, index=dates)
     
     def get_free_news(self, symbol, limit=5):
-        """Free RSS news as fallback"""
+        """Free RSS news (no API key needed)"""
         try:
             clean_symbol = symbol.replace('.NS', '').replace('.BO', '')
-            
             sources = [
                 f"https://news.google.com/rss/search?q={clean_symbol}+NSE+India&hl=en-IN&gl=IN&ceid=IN:en",
                 "https://www.moneycontrol.com/rss/latestnews.xml"
@@ -316,7 +184,6 @@ class FreeAPIClient:
                         })
                 except:
                     continue
-            
             return all_news[:limit]
         except:
             return []
@@ -327,31 +194,19 @@ class FreeAPIClient:
 # ============================================
 
 class IndianStockDataFetcher:
-    """Fetch from best available source"""
+    """Fetch data from free API + optional RapidAPI"""
     
     def __init__(self):
-        # Initialize all clients
-        self.angel_client = AngelOneClient()
-        self.angel_connected = self.angel_client.connect()
-        
-        self.rapid_client = RapidAPIClient() if RAPIDAPI_KEY else None
         self.free_client = FreeAPIClient()
+        self.rapid_client = RapidAPIClient() if RAPIDAPI_KEY else None
         
     @st.cache_data(ttl=300)
     def get_historical_data(self, symbol, exchange="NSE", days=100):
-        """Try AngelOne first, then free API"""
-        
-        # Try AngelOne
-        if self.angel_connected:
-            data = self.angel_client.get_historical_data(symbol, days)
-            if data is not None and len(data) >= 20:
-                return data
-        
-        # Fallback to free API
+        """Get historical data from free API"""
         return self.free_client.get_historical_data(symbol, exchange, days)
     
     def get_enhanced_data(self, symbol):
-        """Get additional data from RapidAPI"""
+        """Get additional data from RapidAPI (optional)"""
         enhanced = {
             'fundamentals': {},
             'analysis': {},
@@ -359,14 +214,15 @@ class IndianStockDataFetcher:
             'source': 'Free API'
         }
         
-        if self.angel_connected:
-            enhanced['source'] = 'AngelOne'
-        
+        # Try RapidAPI if available
         if self.rapid_client:
             enhanced['fundamentals'] = self.rapid_client.get_fundamentals(symbol)
             enhanced['analysis'] = self.rapid_client.get_analysis(symbol)
             enhanced['news'] = self.rapid_client.get_news(symbol)
+            if enhanced['news']:
+                enhanced['source'] = 'RapidAPI'
         
+        # Fallback to free news
         if not enhanced['news']:
             enhanced['news'] = self.free_client.get_free_news(symbol)
         
@@ -382,7 +238,7 @@ class IndianStockPredictor:
         self.data_fetcher = IndianStockDataFetcher()
         
     def get_complete_analysis(self, symbol, exchange="NSE"):
-        """Complete stock analysis"""
+        """Complete stock analysis using free API + optional RapidAPI"""
         
         # Get historical data
         historical_df = self.data_fetcher.get_historical_data(symbol, exchange)
@@ -433,7 +289,6 @@ class IndianStockPredictor:
         negative = ['bear', 'bearish', 'negative', 'loss', 'fall', 'down', 'sell', 'decline']
         
         text = ' '.join([item.get('title', '') for item in news_items]).lower()
-        
         pos = sum(1 for w in positive if w in text)
         neg = sum(1 for w in negative if w in text)
         
@@ -577,12 +432,7 @@ def run_smart_prediction(ticker, df):
 
 def analyze_indian_stock(symbol, exchange="NSE"):
     """
-    ONE FUNCTION TO RULE THEM ALL!
-    
-    Uses:
-    - AngelOne SmartAPI (if connected)
-    - RapidAPI (if key available)
-    - Free API (always works)
+    MAIN FUNCTION - Uses free API + optional RapidAPI
     
     Example:
         result = analyze_indian_stock("RELIANCE")
@@ -598,7 +448,7 @@ def analyze_indian_stock(symbol, exchange="NSE"):
 # ============================================
 
 if __name__ == "__main__":
-    print("🚀 Testing Multi-Source Indian Stock Analysis...")
+    print("🚀 Testing Indian Stock Analysis...")
     
     # Test with Reliance
     result = analyze_indian_stock("RELIANCE")
@@ -619,4 +469,4 @@ if __name__ == "__main__":
         if result['news']:
             print(f"\n📰 Latest News: {len(result['news'])} items")
     else:
-        print("❌ Test failed. Check your API credentials.")
+        print("❌ Test failed. Check your internet connection.")
