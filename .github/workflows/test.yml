@@ -14,48 +14,41 @@ jobs:
         python-version: ['3.9', '3.10', '3.11']
     
     steps:
-    # 1. Checkout code
     - uses: actions/checkout@v4
     
-    # 2. Setup Python
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v4
       with:
         python-version: ${{ matrix.python-version }}
         cache: 'pip'
     
-    # 3. Install dependencies
     - name: 📦 Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install pytest pytest-cov flake8 black mypy types-requests
     
-    # 4. Code formatting check (Black) - Won't fail the build
     - name: 🎨 Check code formatting
       run: black --check . --exclude=".venv|venv|__pycache__" || true
     
-    # 5. Linting (Flake8)
     - name: 🔍 Lint with flake8
       run: |
         flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
     
-    # 6. Type checking (MyPy)
     - name: 📋 Type checking with mypy
       run: |
         echo "🔍 Running MyPy type checker (warnings only)..."
         mypy utils/ pages/ --ignore-missing-imports --install-types --non-interactive --follow-imports=skip || true
       continue-on-error: true
     
-    # 7. Unit tests (Pytest) - WITH EXPLICIT PYTHONPATH
+    # CRITICAL FIX: Set PYTHONPATH and run tests
     - name: ✅ Run unit tests with pytest
       run: |
-        PYTHONPATH=. pytest tests/ -v --cov=utils --cov=pages --cov-report=xml --cov-report=html --cov-report=term-missing
-      env:
-        PYTHONPATH: .
+        export PYTHONPATH=$PYTHONPATH:$(pwd)
+        echo "PYTHONPATH is now: $PYTHONPATH"
+        pytest tests/ -v --cov=utils --cov=pages --cov-report=xml --cov-report=html --cov-report=term-missing
     
-    # 8. Upload coverage to Codecov
     - name: 📊 Upload coverage to Codecov
       uses: codecov/codecov-action@v3
       with:
@@ -64,7 +57,6 @@ jobs:
         name: codecov-umbrella
         fail_ci_if_error: false
     
-    # 9. Streamlit app validation
     - name: 🚀 Validate Streamlit app
       run: |
         streamlit run app.py --logger.level=debug --client.showErrorDetails=true &
@@ -82,23 +74,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
         cache: 'pip'
-    
     - name: Install bandit
       run: pip install bandit
-    
     - name: Run Bandit security check
       run: |
         bandit -r . -f json -o bandit-report.json \
           --exclude ./tests,./venv,./.venv,./__pycache__ \
           --severity-level medium \
           --confidence-level medium || true
-    
     - name: Upload security report
       uses: actions/upload-artifact@v4
       with:
@@ -109,27 +97,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
         cache: 'pip'
-    
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-    
     - name: Check for security vulnerabilities
       run: |
         pip install pip-audit safety
         echo "🔒 Running pip-audit..."
-        pip-audit --requirement requirements.txt --ignore-vuln CVE-2024-XXXXX || true
+        pip-audit --requirement requirements.txt || true
         echo "🔒 Running safety check..."
         safety check -r requirements.txt --full-report || true
-    
-    - name: Check for outdated packages
-      run: |
-        pip install pip-outdated
-        pip-outdated requirements.txt || true
