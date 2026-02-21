@@ -1,10 +1,20 @@
+#!/usr/bin/env python
+"""Test ML engine module."""
+
 import sys
 import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from pathlib import Path
+
+# Add project root to Python path - MUST BE FIRST
+project_root = str(Path(__file__).parent.parent)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 import pytest
 import pandas as pd
 import numpy as np
+
+# Now import from utils
 from utils.ml_engine import (
     calculate_features,
     run_smart_prediction,
@@ -117,9 +127,6 @@ class TestIntegration:
         # Should return error dict
         assert isinstance(result, dict), "Should return dictionary"
         assert 'error' in result, "Should have error message"
-
-# Remove the duplicate TestMLEngine class since we already have TestFeatureCalculation
-# The duplicate was causing conflicts
 
 if __name__ == "__main__":
     # Quick manual test
