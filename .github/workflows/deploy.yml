@@ -9,6 +9,13 @@ on:
     types:
       - completed
 
+# Add permissions at the top level (ONCE)
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  checks: write
+
 jobs:
   deploy:
     # Only deploy if tests pass
