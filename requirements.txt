@@ -21,6 +21,11 @@ beautifulsoup4==4.12.3
 textblob==0.17.1
 nltk==3.8.1
 
+# Type stubs (for mypy)
+types-requests==2.32.0.20241016
+types-python-dateutil==2.9.0.20241003
+types-pytz==2024.2.0.20241003
+
 # Testing & Development Tools
 pytest==7.4.3
 pytest-cov==4.1.0
@@ -29,8 +34,3 @@ flake8==7.0.0
 mypy==1.8.0
 bandit==1.7.5
 pip-audit==2.6.2
-
-# Add these for type checking
-types-requests==2.32.0.20241016
-types-python-dateutil==2.9.0.20241003
-types-pytz==2024.2.0.20241003
