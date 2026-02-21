@@ -14,3 +14,31 @@ exclude = '''
   | build
   | dist
 )/
+'''
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+follow_imports = "skip"
+warn_unused_ignores = false
+warn_return_any = false
+warn_unused_configs = false
+exclude = [
+    'build/',
+    'dist/',
+    '\.venv/',
+    'tests/',
+    'pages/99_Test.py'
+]
+
+[[tool.mypy.overrides]]
+module = [
+    'requests',
+    'feedparser',
+    'yfinance',
+    'plotly',
+    'nltk',
+    'pandas',
+    'numpy',
+]
+ignore_missing_imports = true
