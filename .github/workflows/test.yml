@@ -42,7 +42,6 @@ jobs:
         mypy utils/ pages/ --ignore-missing-imports --install-types --non-interactive --follow-imports=skip || true
       continue-on-error: true
     
-    # CRITICAL FIX: Set PYTHONPATH and run tests
     - name: ✅ Run unit tests with pytest
       run: |
         export PYTHONPATH=$PYTHONPATH:$(pwd)
@@ -57,16 +56,66 @@ jobs:
         name: codecov-umbrella
         fail_ci_if_error: false
     
+    # SINGLE Streamlit validation step with debugging
     - name: 🚀 Validate Streamlit app
       run: |
-        streamlit run app.py --logger.level=debug --client.showErrorDetails=true &
+        echo "=== CHECKING PYTHON SYNTAX ==="
+        python -m py_compile app.py || exit 1
+        python -m py_compile utils/*.py || exit 1
+        
+        echo "=== TESTING IMPORTS ==="
+        python -c "
+import sys
+print(f'Python version: {sys.version}')
+try:
+    import streamlit
+    print(f'✅ streamlit: {streamlit.__version__}')
+except Exception as e:
+    print(f'❌ streamlit: {e}')
+    sys.exit(1)
+
+try:
+    import pandas
+    print(f'✅ pandas: {pandas.__version__}')
+except Exception as e:
+    print(f'❌ pandas: {e}')
+    sys.exit(1)
+
+try:
+    from utils.ml_engine import analyze_indian_stock
+    print('✅ utils.ml_engine import OK')
+except Exception as e:
+    print(f'❌ utils.ml_engine import failed: {e}')
+    sys.exit(1)
+
+try:
+    from utils.data_engine import robust_yf_download
+    print('✅ utils.data_engine import OK')
+except Exception as e:
+    print(f'❌ utils.data_engine import failed: {e}')
+    sys.exit(1)
+
+print('🎉 All imports successful!')
+"
+        
+        echo "=== STARTING STREAMLIT APP ==="
+        streamlit run app.py --server.headless=true --server.port=8501 --logger.level=debug > streamlit.log 2>&1 &
         STREAMLIT_PID=$!
-        sleep 10
+        echo "Streamlit PID: $STREAMLIT_PID"
+        
+        # Wait for app to initialize
+        sleep 15
+        
+        # Check if still running
         if ps -p $STREAMLIT_PID > /dev/null; then
           echo "✅ Streamlit app started successfully"
+          echo "--- Last 20 lines of Streamlit log ---"
+          tail -20 streamlit.log
           kill $STREAMLIT_PID
         else
           echo "❌ Streamlit app failed to start"
+          echo "--- Full Streamlit log ---"
+          cat streamlit.log
           exit 1
         fi
 
