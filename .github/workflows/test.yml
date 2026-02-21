@@ -29,9 +29,9 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install pytest pytest-cov flake8 black mypy
+        pip install pytest pytest-cov flake8 black mypy types-requests
     
-    # 4. Code formatting check (Black) - Now won't fail the build
+    # 4. Code formatting check (Black) - Won't fail the build
     - name: 🎨 Check code formatting
       run: black --check . --exclude=".venv|venv|__pycache__" || true
     
@@ -41,9 +41,12 @@ jobs:
         flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
     
-    # 6. Type checking (MyPy)
+    # 6. Type checking (MyPy) - SINGLE CORRECT VERSION
     - name: 📋 Type checking with mypy
-      run: mypy utils/ pages/ --ignore-missing-imports || true
+      run: |
+        echo "🔍 Running MyPy type checker (warnings only)..."
+        mypy utils/ pages/ --ignore-missing-imports --install-types --non-interactive --follow-imports=skip || true
+      continue-on-error: true
     
     # 7. Unit tests (Pytest)
     - name: ✅ Run unit tests with pytest
