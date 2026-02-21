@@ -1,11 +1,28 @@
+# app.py
 import nltk
-nltk.download('punkt')
+import ssl
 import streamlit as st
 import pandas as pd
-from utils.data_engine import robust_yf_download, get_fundamentals, get_news_sentiment
-from utils.ml_engine import calculate_features, run_smart_prediction
-from utils.chart_engine import plot_candlestick, plot_macd
 import feedparser
+
+# ==================== NLTK SETUP (MUST BE FIRST) ====================
+try:
+    _create_unverified_https_context = ssl._create_unverified_context
+except AttributeError:
+    pass
+else:
+    ssl._create_default_https_context = _create_unverified_https_context
+
+# Download NLTK data
+nltk.download('punkt', quiet=True)
+nltk.download('averaged_perceptron_tagger', quiet=True)
+nltk.download('punkt_tab', quiet=True)
+
+# ==================== IMPORTS (AFTER NLTK) ====================
+from utils.data_engine import robust_yf_download, get_fundamentals, get_news_sentiment
+from utils.ml_engine import calculate_features, run_smart_prediction, analyze_indian_stock
+from utils.chart_engine import plot_candlestick, plot_macd
+from utils.analytics_engine import init_analytics_db, log_prediction, calculate_win_rate
 
 # ==================== PAGE CONFIG ====================
 st.set_page_config(
@@ -40,6 +57,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ==================== INITIALIZE DATABASE ====================
+init_analytics_db()
+
 # ==================== SESSION STATE ====================
 if 'page' not in st.session_state:
     st.session_state.page = "Dashboard"
@@ -71,11 +91,11 @@ with tab1:
     for (name, sym), col in zip(INDICES.items(), cols):
         with col:
             df = robust_yf_download(sym, "5d")
-            if df is not None:
+            if df is not None and not df.empty:
                 curr = df['Close'].iloc[-1]
-                prev = df['Close'].iloc[-2]
+                prev = df['Close'].iloc[-2] if len(df) > 1 else curr
                 chg = curr - prev
-                pct = (chg / prev) * 100
+                pct = (chg / prev) * 100 if prev != 0 else 0
                 clr = "#00d09c" if chg >= 0 else "#ff4b4b"
                 
                 st.markdown(f"""
@@ -100,52 +120,89 @@ with tab2:
     
     if st.button("🔍 Analyze", key="analyze"):
         with st.spinner(f"Analyzing {full_ticker}..."):
-            df = robust_yf_download(full_ticker, "2y")
-            
-            if df is not None:
-                df = calculate_features(df)
+            try:
+                # Try using our new Indian stock analyzer first
+                result = analyze_indian_stock(ticker_input.upper(), market)
                 
-                if df is not None:
-                    prediction = run_smart_prediction(full_ticker, df)
+                if result and 'error' not in result and result['prediction']:
+                    prediction = result['prediction']
                     
-                    if prediction:
-                        # Verdict Card
-                        st.markdown(f"""
-                        <div class="fun-card" style="border-left: 8px solid {prediction['color']}; margin-bottom: 20px;">
-                            <h1 style="color:{prediction['color']}; margin:0;">{prediction['verdict']}</h1>
-                            <p style="color:#aaa;">Confidence: {prediction['confidence']*100:.0f}%</p>
-                            <hr style="border-color:#333;">
-                            <p style="color:#ddd;"><i>{prediction['reason']}</i></p>
-                            <div style="display:flex; justify-content:space-around; margin-top:10px;">
-                                <div><span style="color:#aaa;">Current</span><h3>₹{prediction['curr']:.2f}</h3></div>
-                                <div><span style="color:#aaa;">Stop Loss</span><h3 style="color:#ff4b4b;">₹{prediction['sl']:.2f}</h3></div>
-                                <div><span style="color:#aaa;">Target</span><h3 style="color:#00d09c;">₹{prediction['tgt']:.2f}</h3></div>
-                            </div>
+                    # Verdict Card
+                    st.markdown(f"""
+                    <div class="fun-card" style="border-left: 8px solid {prediction['color']}; margin-bottom: 20px;">
+                        <h1 style="color:{prediction['color']}; margin:0;">{prediction['verdict']}</h1>
+                        <p style="color:#aaa;">Confidence: {prediction['confidence']*100:.0f}% | Source: {result.get('data_source', 'Free API')}</p>
+                        <hr style="border-color:#333;">
+                        <p style="color:#ddd;"><i>{prediction['reason']}</i></p>
+                        <div style="display:flex; justify-content:space-around; margin-top:10px;">
+                            <div><span style="color:#aaa;">Current</span><h3>₹{prediction['curr']:.2f}</h3></div>
+                            <div><span style="color:#aaa;">Stop Loss</span><h3 style="color:#ff4b4b;">₹{prediction['sl']:.2f}</h3></div>
+                            <div><span style="color:#aaa;">Target</span><h3 style="color:#00d09c;">₹{prediction['tgt']:.2f}</h3></div>
                         </div>
-                        """, unsafe_allow_html=True)
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Support & Resistance
+                    if result.get('support_resistance'):
+                        sr = result['support_resistance']
+                        col1, col2 = st.columns(2)
+                        col1.metric("Support Level", f"₹{sr['support']}")
+                        col2.metric("Resistance Level", f"₹{sr['resistance']}")
+                    
+                    # Log prediction if BUY
+                    if "BUY" in prediction['verdict']:
+                        pred_id = log_prediction(
+                            ticker=full_ticker,
+                            verdict=prediction['verdict'],
+                            predicted_price=prediction['curr'],
+                            sl=prediction['sl'],
+                            tgt=prediction['tgt'],
+                            confidence=prediction['confidence'],
+                            entry_price=prediction['curr']
+                        )
                         
-                        # Charts
-                        st.subheader("📉 Price Action")
-                        st.plotly_chart(plot_candlestick(df, full_ticker), use_container_width=True)
-                        
-                        st.subheader("📊 MACD Indicator")
-                        st.plotly_chart(plot_macd(df), use_container_width=True)
-                        
-                        # Fundamentals
-                        st.subheader("📋 Fundamentals")
-                        fund = get_fundamentals(full_ticker)
-                        if fund:
-                            f_cols = st.columns(4)
-                            f_cols[0].metric("P/E Ratio", f"{fund.get('P/E', 0):.2f}")
-                            f_cols[1].metric("ROE", f"{fund.get('ROE', 0):.2f}%")
-                            f_cols[2].metric("Book Value", f"₹{fund.get('Book Value', 0):.2f}")
-                            f_cols[3].metric("Div Yield", f"{fund.get('Dividend Yield', 0):.2f}%")
-                    else:
-                        st.error("Could not generate prediction.")
+                        # Show win rate
+                        wr = calculate_win_rate(days=30)
+                        st.info(f"📊 30-day Win Rate: **{wr['win_rate']:.1f}%** ({wr['wins']}/{wr['total_trades']} trades)")
+                    
+                    # News section
+                    if result.get('news'):
+                        with st.expander("📰 Latest News"):
+                            for news in result['news'][:3]:
+                                st.markdown(f"• {news.get('title', '')}")
+                
                 else:
-                    st.error("Error calculating features.")
-            else:
-                st.error(f"Could not fetch data for {full_ticker}")
+                    # Fallback to yfinance
+                    st.warning("Using yfinance as fallback...")
+                    df = robust_yf_download(full_ticker, "2y")
+                    
+                    if df is not None:
+                        df = calculate_features(df)
+                        if df is not None:
+                            prediction = run_smart_prediction(full_ticker, df)
+                            if prediction:
+                                st.markdown(f"""
+                                <div class="fun-card" style="border-left: 8px solid {prediction['color']};">
+                                    <h1 style="color:{prediction['color']};">{prediction['verdict']}</h1>
+                                    <p>{prediction['reason']}</p>
+                                </div>
+                                """, unsafe_allow_html=True)
+                                
+                                # Charts
+                                st.subheader("📉 Price Action")
+                                st.plotly_chart(plot_candlestick(df, full_ticker), use_container_width=True)
+                                
+                                st.subheader("📊 MACD Indicator")
+                                st.plotly_chart(plot_macd(df), use_container_width=True)
+                            else:
+                                st.error("Could not generate prediction.")
+                        else:
+                            st.error("Error calculating features.")
+                    else:
+                        st.error(f"Could not fetch data for {full_ticker}")
+                        
+            except Exception as e:
+                st.error(f"Analysis failed: {e}")
 
 # ==================== TAB 3: MARKET NEWS ====================
 with tab3:
@@ -153,7 +210,7 @@ with tab3:
     
     try:
         feed = feedparser.parse("https://www.moneycontrol.com/rss/marketreports.xml")
-        for entry in feed.entries[:5]:
+        for entry in feed.entries[:10]:
             with st.container():
                 st.markdown(f"""
                 <div style="background:#161920; padding:12px; border-radius:10px; margin-bottom:10px; border-left:3px solid #4c8bf5;">
@@ -169,8 +226,8 @@ with tab4:
     st.header("⭐ AI Stock Picks")
     
     SCANNER_POOL = [
-        "RELIANCE.NS", "HDFCBANK.NS", "INFY.NS", "TCS.NS",
-        "ITC.NS", "SBIN.NS", "TATAMOTORS.NS", "ZOMATO.NS"
+        "RELIANCE", "HDFCBANK", "INFY", "TCS",
+        "ITC", "SBIN", "TATAMOTORS", "ZOMATO"
     ]
     
     if st.button("🔍 Scan All Stocks"):
@@ -180,13 +237,11 @@ with tab4:
         for i, ticker in enumerate(SCANNER_POOL):
             progress_bar.progress((i + 1) / len(SCANNER_POOL))
             
-            df = robust_yf_download(ticker, "2y")
-            if df is not None:
-                df = calculate_features(df)
-                if df is not None:
-                    pred = run_smart_prediction(ticker, df)
-                    if pred and "BUY" in pred['verdict']:
-                        results.append((ticker, pred['verdict'], pred['curr'], pred['color']))
+            result = analyze_indian_stock(ticker, "NSE")
+            if result and 'error' not in result and result['prediction']:
+                pred = result['prediction']
+                if "BUY" in pred['verdict']:
+                    results.append((ticker, pred['verdict'], pred['curr'], pred['color']))
         
         progress_bar.empty()
         
@@ -201,6 +256,7 @@ with tab4:
         else:
             st.warning("No buy signals found today.")
 
+# ==================== FOOTER ====================
 st.markdown("---")
 st.markdown("""
 <div style="text-align:center; color:#666; font-size:11px; margin-top:30px; border-top:1px solid #333; padding-top:10px;">
@@ -209,30 +265,3 @@ st.markdown("""
     Markets are highly volatile and predictions can fail.
 </div>
 """, unsafe_allow_html=True)
-
-# In app.py, add at the top:
-from utils.analytics_engine import init_analytics_db, log_prediction, calculate_win_rate
-
-# Initialize database on app start
-init_analytics_db()
-
-# In the Stock Analyzer section, after getting prediction:
-if prediction and "BUY" in prediction['verdict']:
-    # Log the prediction
-    prediction_id = log_prediction(
-        ticker=full_ticker,
-        verdict=prediction['verdict'],
-        predicted_price=prediction['curr'],
-        sl=prediction['sl'],
-        tgt=prediction['tgt'],
-        confidence=prediction['confidence'],
-        entry_price=prediction['curr']
-    )
-    
-    st.success(f"✅ Prediction logged (ID: {prediction_id})")
-    
-    # Show win rate
-    wr = calculate_win_rate(days=30)
-    st.info(f"📊 30-day Win Rate: **{wr['win_rate']:.1f}%** ({wr['wins']}/{wr['total_trades']} trades)")
-
-
